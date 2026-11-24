@@ -84,12 +84,12 @@ jobs:
           TAG: ${{ needs.check.outputs.tag }}
           SHA: ${{ needs.check.outputs.sha }}
         run: |
-          (cd dist && zip -qr "../WiiMC-nightly-$TAG.zip" apps)
+          (cd dist && zip -qr "../WiiMC-$TAG.zip" apps)
           rm -rf source/.git
           tar -czf "source-$TAG.tar.gz" source
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --prerelease --title "$TAG" \
             --notes "WiiMC built from https://github.com/dborth/wiimc/commit/$SHA (its source is attached). Not an official release: a daily build for RiftWii's app store." \
-            "WiiMC-nightly-$TAG.zip" "source-$TAG.tar.gz"
+            "WiiMC-$TAG.zip" "source-$TAG.tar.gz"
       - name: Keep the newest 10 builds
         env:
           GH_TOKEN: ${{ github.token }}
