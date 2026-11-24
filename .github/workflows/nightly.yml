@@ -1,0 +1,98 @@
+# Builds WiiMC from dborth/wiimc's newest commit, once a day when there is
+# one, and publishes it as a release with its own tag (nightly-<date>-<commit>),
+# for RiftWii's app store (https://github.com/RiftWii/apps). A tag is never
+# moved: the store pins each build by its checksum. Each release carries the
+# exact source it was built from (GPL).
+name: Nightly
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.upstream.outputs.sha }}
+      tag: ${{ steps.upstream.outputs.tag }}
+      build: ${{ steps.upstream.outputs.build }}
+    steps:
+      - id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git ls-remote https://github.com/dborth/wiimc.git refs/heads/master | cut -c1-40)
+          test -n "$sha"
+          short=${sha:0:7}
+          last=$(gh release list -R "$GITHUB_REPOSITORY" -L 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=nightly-$(date -u +%Y.%m.%d)-$short" >> "$GITHUB_OUTPUT"
+          if [ "${last##*-}" = "$short" ]; then
+            echo "Nothing new upstream since $last."
+            echo "build=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'yes'
+    runs-on: ubuntu-latest
+    container: ghcr.io/extremscorner/libogc2:latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: dborth/wiimc
+          ref: ${{ needs.check.outputs.sha }}
+          path: src
+          submodules: recursive
+      - name: Build
+        run: |
+          cd src
+          make -f Makefile -j2
+      - name: Package
+        run: |
+          mkdir -p dist/apps/wiimc
+          cp src/hbc/* dist/apps/wiimc/
+          cp src/executables/wiimc.dol dist/apps/wiimc/boot.dol
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: dist/
+
+  release:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app
+          path: dist
+      - uses: actions/checkout@v4
+        with:
+          repository: dborth/wiimc
+          ref: ${{ needs.check.outputs.sha }}
+          path: source
+          submodules: recursive
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+          SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          (cd dist && zip -qr "../WiiMC-nightly-$TAG.zip" apps)
+          rm -rf source/.git
+          tar -czf "source-$TAG.tar.gz" source
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --prerelease --title "$TAG" \
+            --notes "WiiMC built from https://github.com/dborth/wiimc/commit/$SHA (its source is attached). Not an official release: a daily build for RiftWii's app store." \
+            "WiiMC-nightly-$TAG.zip" "source-$TAG.tar.gz"
+      - name: Keep the newest 10 builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list -R "$GITHUB_REPOSITORY" -L 100 --json tagName -q '.[].tagName' | tail -n +11 |
+            while read -r old; do gh release delete "$old" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
